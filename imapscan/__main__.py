@@ -10,6 +10,8 @@ from email.policy import SMTPUTF8
 
 from sys import exit
 from re import search
+from os.path import isdir, join
+from os import mkdir
 
 import logging
 log = logging.getLogger(__name__)
@@ -50,6 +52,8 @@ def parse():
                         help='search criteria to match e-mails against')
     parser.add_argument('--limit', help='max number of messages to retrieve',
                         type=int)
+    parser.add_argument('--attachments',
+                        help='Output directory for attachments')
     file_operations = parser.add_mutually_exclusive_group()
     file_operations.add_argument('--in-file', help='input DataFrame (CSV)')
     file_operations.add_argument('--out-file', help='output DataFrame (CSV)')
@@ -64,8 +68,9 @@ def get_message(imap, num):
         _, data = imap.fetch(num, '(RFC822)')
         # Parse e-mail message
         return message_from_string(data[0][1].decode(), policy=SMTPUTF8)
-    except TypeError:
+    except (TypeError, UnicodeDecodeError):
         # Catch any parse errors, keep going
+        log.info('Error creating message from string')
         return None
 
 
@@ -139,6 +144,7 @@ def get_rows(messages):
             # log.info('{d} | {f: <40.40} | {s: <40.40}'.format(
             #          f=msg['From'], s=msg['Subject'], d=msg['Date']))
         except TypeError:
+            log.info('Error decoding message for use in row')
             continue
     return rows
 
@@ -164,6 +170,30 @@ def get_unique_address(row):
     return addresses
 
 
+def get_attachments(messages, out_dir):
+    """ """
+    if not isdir(out_dir):
+        # Create out_dir to store attachments
+        mkdir(out_dir, 0o755)
+
+    for msg in messages:
+        # Process each individual message
+        for part in msg.walk():
+            if not part.is_attachment():
+                continue
+            if not part.get_filename():
+                continue
+            # Message is an attachment, write to disk
+            msg_dir = join(out_dir, msg['Message-ID'])
+            if not isdir(msg_dir):
+                log.debug(f'Creating directory {msg_dir}')
+                mkdir(msg_dir, 0o755)
+            msg_filename = join(msg_dir, part.get_filename())
+            with open(msg_filename, 'wb') as f:
+                log.info(f'Writing file: {msg_filename}')
+                f.write(part.get_payload(decode=True))
+
+
 def has_attachment(msg):
     """ Process each multipart of a message and check if an attachment is
     found """
@@ -175,10 +205,12 @@ def has_attachment(msg):
 
 def format_series(series):
     """ """
+    coordinates = []
     values = []
     for index, value in series.items():
-        values.append('({i}, {v})'.format(i=index, v=value))
-    return ' '.join(values)
+        coordinates.append('{i}'.format(i=index))
+        values.append("({i}, {v})".format(i=index, v=value))
+    return (','.join(coordinates), ' '.join(values))
 
 
 def main():
@@ -194,9 +226,11 @@ def main():
         else:
             # Retrieve all messages from the server
             messages = get_messages(options)
-            log.info('{s:-^80}'.format(s=' E-mail Messages '))
             # Retrieve all rows for the messages
             rows = get_rows(messages)
+            if options.attachments:
+                # Get attachments
+                get_attachments(messages, options.attachments)
 
             # Create a new DataFrame from the rows
             df = pd.DataFrame(rows)
