@@ -132,6 +132,8 @@ def get_rows(messages):
         try:
             # Create a new row based on the EmailMessage
             date = pd.to_datetime(msg['Date'])
+            if date is None:
+                continue
             row = {'From': msg['From'], 'To': msg['To'],
                    'Subject': msg['Subject'],
                    'Date': date,
@@ -177,6 +179,15 @@ def get_attachments(messages, out_dir):
         mkdir(out_dir, 0o755)
 
     for msg in messages:
+        # Write message to disk
+        msg_id = msg['Message-ID']
+        if msg_id is None:
+            log.info('Message has no Message-ID')
+            continue
+        msg_filename = join(out_dir, f'{msg_id}.eml')
+        with open(msg_filename, 'w') as f:
+            log.info(f'Writing file: {msg_filename}')
+            f.write(msg.as_string(policy=SMTPUTF8))
         # Process each individual message
         for part in msg.walk():
             if not part.is_attachment():
